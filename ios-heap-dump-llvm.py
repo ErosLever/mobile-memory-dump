@@ -138,12 +138,12 @@ def dumpRegionsWithLLDB(regions):
 	cmd.HandleCommand("process connect connect://127.0.0.1:4567",res)
 	print res.GetOutput().strip()
 
-	for (start_region, end_region) in regions:
+	for idx, (start_region, end_region) in enumerate(regions):
 		filename = "%s-%s.bin" % (start_region[2:],end_region[2:])
 		size = int(end_region,16) - int(start_region,16)
 		if os.path.exists(filename) and size == os.path.getsize(filename):
 			continue
-		print "Dumping memory area %s - %s (%d Kb)" % (start_region,end_region,size/1024.0)
+		print "%3d - Dumping memory area %s - %s (%d Kb)" % (idx,start_region,end_region,size/1024.0)
 		cmd.HandleCommand('memory read --force --binary --outfile "%s" %s %s' % (filename,start_region,end_region),res)
 		print res.GetOutput().strip()
 
