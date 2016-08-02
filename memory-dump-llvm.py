@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import sys, re
+import sys, re, os
 from pexpect import pxssh
 sys.path.insert(0, '/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Resources/Python')
 import lldb
@@ -9,8 +9,10 @@ class SshClient(object):
 		self.s = s = pxssh.pxssh()
 		options.update(add_options)
 		s.options = options
+		print "Connecting via SSH to %s@%s" % (username,hostname)
 		if not s.login(server=hostname, username=username, password=password, port=port):
 			raise RuntimeError("Invalid SSH connection or credentials")
+		print "Successfully connected via SSH"
 
 	def execCommand(self, cmd):
 		s = self.s
@@ -44,6 +46,7 @@ def findPidByName(ssh,name):
 	pids = [int(line.split()[1]) for line in ssh.stdout.splitlines()]
 	if len(pids) != 1:
 		raise RuntimeError("Can't decide between pids %s for name %s" % (pids,repr(name)))
+	print "Found PID for process name '%s': %d" % (name,pids[0])
 	return pids[0]
 
 procExpInstalled = False
@@ -54,6 +57,7 @@ def installProcExpIfNeeded(ssh):
 	ssh.execCommand('find /tmp/ -maxdepth 1 -type f -name procexp.universal -perm +111')
 	if ssh.stdout:
 		return
+	print "Installing procexp"
 	url = "http://web.archive.org/web/20160406180403/http://newosxbook.com/tools/procexp.tgz"
 	ssh.execCommand('wget -O /tmp/procexp.tgz %s' % repr(url))
 	if ssh.retcode != 0:
@@ -64,6 +68,7 @@ def installProcExpIfNeeded(ssh):
 	ssh.execCommand('chmod 777 /tmp/procexp.universal')
 	if ssh.retcode != 0:
 		raise RuntimeError("Can't chmod procexp.universal from /tmp/procexp.tgz")
+	print "Procexp installed successfully"
 	procExpInstalled = True
 
 def listRegionsWithProcExp(ssh,pid):
@@ -74,6 +79,7 @@ def listRegionsWithProcExp(ssh,pid):
 		raise RuntimeError("Invalid PID %d" % pid)
 	regions = re.findall(r'\s([\da-f]+)-([\da-f]+)\s',ssh.stdout)
 	regions = [(hex(int(start,16)),hex(int(end,16))) for (start,end) in regions]
+	print "Found %d memory regions to dump (%d Mb total)" % (len(regions),sum(map(lambda (x,y):int(y,16)-int(x,16),regions))/1024.0/1024)
 	return regions
 
 debugServerInstalled = False
@@ -84,6 +90,7 @@ def installDebugServerIfNeeded(ssh):
 	ssh.execCommand('find /tmp/ -maxdepth 1 -type f -name debugserver -perm +111')
 	if ssh.stdout:
 		return
+	print "Installing debugserver"
 	url = "https://raw.githubusercontent.com/heardrwt/ios-debugserver/master/7.0/debugserver"
 	ssh.execCommand('wget -O /tmp/debugserver %s' % repr(url))
 	if ssh.retcode != 0:
@@ -91,12 +98,14 @@ def installDebugServerIfNeeded(ssh):
 	ssh.execCommand('chmod 777 /tmp/debugserver')
 	if ssh.retcode != 0:
 		raise RuntimeError("Can't chmod /tmp/debugserver")
+	print "Debugserver installed successfully"
 	debugServerInstalled = True
 
 def dumpRegionsByPid(ssh,pid):
 	installProcExpIfNeeded(ssh)
 	regions = listRegionsWithProcExp(ssh,pid)
 	installDebugServerIfNeeded(ssh)
+	print "Attaching debugserver to PID %d" % (pid,)
 	ssh.execCommand('/tmp/debugserver *:4567 --attach %d & #' % pid)
 	ssh.execCommand('jobs')
 	if not ssh.stdout:
@@ -115,6 +124,7 @@ def dumpRegions(ssh,pidOrProcName):
 		dumpRegionsByProcessName(ssh,pidOrProcName)
 
 def dumpRegionsWithLLDB(regions):
+	print "Starting LLDB locally"
 	dbg = lldb.SBDebugger.Create()
 	dbg.SetAsync(False)
 
@@ -124,6 +134,7 @@ def dumpRegionsWithLLDB(regions):
 	cmd.HandleCommand("platform select remote-ios",res)
 	print res.GetOutput().strip()
 
+	print "Connecting to remote process"
 	cmd.HandleCommand("process connect connect://127.0.0.1:4567",res)
 	print res.GetOutput().strip()
 
@@ -132,7 +143,8 @@ def dumpRegionsWithLLDB(regions):
 		size = int(end_region,16) - int(start_region,16)
 		if os.path.exists(filename) and size == os.path.getsize(filename):
 			continue
-		cmd.HandleCommand('memory read --force --binary --outfile "%s-%s.bin" %s %s' % (filename,start_region,end_region),res)
+		print "Dumping memory area %s - %s (%d Kb)" % (start_region,end_region,size/1024.0)
+		cmd.HandleCommand('memory read --force --binary --outfile "%s" %s %s' % (filename,start_region,end_region),res)
 		print res.GetOutput().strip()
 
 if __name__ == "__main__":
